@@ -53,62 +53,17 @@ class Variant
 
 public:
 
-  Variant() {
-    _type = OTHER;
-    _storage.raw_string = nullptr;
-  }
+  Variant();
+  Variant(const Variant& other);
+  Variant(Variant&& other);
+  template<typename T> Variant(const T& value);
+  // specialization for raw string
+  Variant(const char* buffer, size_t length);
 
   ~Variant();
 
-  Variant(const Variant& other): _type(OTHER)
-  {
-    if( other._type == STRING)
-    {
-      const char* raw = other._storage.raw_string;
-      const uint32_t size = *(reinterpret_cast<const uint32_t*>( &raw[0] ));
-      const char* data = (&raw[4]);
-      assign( data, size );
-    }
-    else{
-      _type = other._type;
-      _storage.raw_data = other._storage.raw_data;
-    }
-  }
-
-  Variant(Variant&& other): _type(OTHER)
-  {
-    if( other._type == STRING)
-    {
-      _storage.raw_string = nullptr;
-      std::swap( _storage.raw_string,  other._storage.raw_string);
-      std::swap( _type, other._type);
-    }
-    else{
-      _type = other._type;
-      _storage.raw_data = other._storage.raw_data;
-    }
-  }
-
-  Variant& operator = (const Variant& other)
-  {
-    if( other._type == STRING)
-    {
-      const char* raw = other._storage.raw_string;
-      const uint32_t size = *(reinterpret_cast<const uint32_t*>( &raw[0] ));
-      const char* data = (&raw[4]);
-      assign( data, size );
-    }
-    else{
-      _type = other._type;
-      _storage.raw_data = other._storage.raw_data;
-    }
-    return *this;
-  }
-
-  template<typename T> Variant(const T& value);
-
-  // specialization for raw string
-  Variant(const char* buffer, size_t length);
+  Variant& operator= (const Variant& other);
+  Variant& operator= (Variant&& other);
 
   BuiltinType getTypeID() const;
 
@@ -121,12 +76,17 @@ public:
   void assign(const char* buffer, size_t length);
 
 private:
+  inline bool is_string() const { return _type == STRING; }
 
   union {
     std::array<uint8_t,8> raw_data;
-    char* raw_string;
+    struct {
+      uint32_t size;
+      char* raw_string;
+    };
   }_storage;
 
+  void ensureStringStorage(size_t size);
   void clearStringIfNecessary();
 
   BuiltinType _type;
@@ -146,10 +106,40 @@ bool operator ==(const T& num, const Variant& var)
 
 //----------------------- Implementation ----------------------------------------------
 
+inline Variant::Variant(): _type(OTHER)
+{
+  memset(&_storage, 0, sizeof(_storage));
+}
+
+inline Variant::Variant(const Variant& other): Variant()
+{
+  if(other.is_string())
+  {
+    const char* data = other._storage.raw_string;
+    const uint32_t size = other._storage.size;
+    assign( data, size );
+  }
+  else{
+    _type = other._type;
+    _storage.raw_data = other._storage.raw_data;
+  }
+}
+
+inline Variant::Variant(Variant&& other): Variant()
+{
+  if(other.is_string())
+  {
+    std::swap( _storage.raw_string,  other._storage.raw_string);
+    std::swap( _storage.size,        other._storage.size);
+  }
+  else{
+    std::swap( _storage.raw_data, other._storage.raw_data);
+  }
+  std::swap( _type, other._type);
+}
 
 template<typename T>
-inline Variant::Variant(const T& value):
-  _type(OTHER)
+inline Variant::Variant(const T& value): Variant()
 {
   static_assert (std::numeric_limits<T>::is_specialized ||
                  std::is_same<T, ros::Time>::value ||
@@ -157,20 +147,46 @@ inline Variant::Variant(const T& value):
                  std::is_same<T, std::string>::value ||
                  std::is_same<T, ros::Duration>::value
                  , "not a valid type");
-
-  _storage.raw_string = (nullptr);
   assign(value);
 }
 
-inline Variant::Variant(const char* buffer, size_t length):_type(OTHER)
+inline Variant::Variant(const char* buffer, size_t length): Variant()
 {
-  _storage.raw_string = (nullptr);
   assign(buffer,length);
 }
 
 inline Variant::~Variant()
 {
   clearStringIfNecessary();
+}
+
+inline Variant& Variant::operator=(const Variant& other)
+{
+  if(other.is_string())
+  {
+    const char* data = other._storage.raw_string;
+    const uint32_t size = other._storage.size;
+    assign( data, size );
+  }
+  else{
+    _type = other._type;
+    _storage.raw_data = other._storage.raw_data;
+  }
+  return *this;
+}
+
+inline Variant& Variant::operator=(Variant&& other)
+{
+  if(other.is_string())
+  {
+    std::swap( _storage.raw_string,  other._storage.raw_string);
+    std::swap( _storage.size,        other._storage.size);
+  }
+  else{
+    std::swap( _storage.raw_data, other._storage.raw_data);
+  }
+  std::swap( _type, other._type);
+  return *this;
 }
 
 //-------------------------------------
@@ -196,23 +212,23 @@ template<typename T> inline T Variant::extract( ) const
 template<> inline SString Variant::extract( ) const
 {
 
-  if( _type != STRING )
+  if(!is_string())
   {
     throw TypeException("Variant::extract -> wrong type");
   }
-  const uint32_t size = *(reinterpret_cast<const uint32_t*>( &_storage.raw_string[0] ));
-  char* data = static_cast<char*>(&_storage.raw_string[4]);
+  const uint32_t size = _storage.size;
+  char* data = _storage.raw_string;
   return SString(data, size);
 }
 
 template<> inline std::string Variant::extract( ) const
 {
-  if( _type != STRING )
+  if(!is_string())
   {
     throw TypeException("Variant::extract -> wrong type");
   }
-  const uint32_t size = *(reinterpret_cast<const uint32_t*>( &_storage.raw_string[0] ));
-  char* data = static_cast<char*>(&_storage.raw_string[4]);
+  const uint32_t size = _storage.size;
+  char* data = _storage.raw_string;
   return std::string(data, size);
 }
 
@@ -230,24 +246,35 @@ template <typename T> inline void Variant::assign(const T& value)
   *reinterpret_cast<T *>( &_storage.raw_data[0] ) =  value;
 }
 
+inline void Variant::ensureStringStorage(size_t size)
+{
+  if (size > _storage.size) {
+    clearStringIfNecessary();
+    _storage.raw_string = new char[size];
+    _storage.size = size;
+  }
+}
+
 inline void Variant::clearStringIfNecessary()
 {
-  if( _storage.raw_string && _type == STRING)
+  if(is_string() && _storage.raw_string)
   {
     delete [] _storage.raw_string;
     _storage.raw_string = nullptr;
+    _storage.size = 0;
   }
 }
 
 inline void Variant::assign(const char* buffer, size_t size)
 {
-  clearStringIfNecessary();
+  if (_type != STRING) {
+    _storage.raw_string = nullptr;
+    _storage.size = 0;
+  }
   _type = STRING;
-
-  _storage.raw_string = new char[size+5];
-  *reinterpret_cast<uint32_t *>( &_storage.raw_string[0] ) = size;
-  memcpy(&_storage.raw_string[4] , buffer, size );
-  _storage.raw_string[size+4] = '\0';
+  ensureStringStorage(size+1);
+  memcpy(_storage.raw_string, buffer, size);
+  _storage.raw_string[size] = '\0';
 }
 
 
@@ -377,7 +404,7 @@ template<> inline ros::Duration Variant::convert() const
 
 template<> inline SString Variant::convert() const
 {
-  if(  _type != STRING )
+  if(!is_string())
   {
      throw TypeException("Variant::convert -> cannot convert to SString");
   }
@@ -386,7 +413,7 @@ template<> inline SString Variant::convert() const
 
 template<> inline std::string Variant::convert() const
 {
-  if(  _type != STRING )
+  if(!is_string())
   {
      throw TypeException("Variant::convert -> cannot convert to std::string");
   }

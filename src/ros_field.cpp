@@ -42,13 +42,14 @@ namespace RosIntrospection{
 ROSField::ROSField(const std::string &definition):
   _array_size(1)
 {
+  //std::cerr << definition << std::endl;
   static const  boost::regex type_regex("[a-zA-Z][a-zA-Z0-9_]*"
                                         "(/[a-zA-Z][a-zA-Z0-9_]*){0,1}"
                                         "(\\[[0-9]*\\]){0,1}");
 
   static const  boost::regex field_regex("[a-zA-Z][a-zA-Z0-9_]*");
 
-  static const boost::regex array_regex("(.+)(\\[([0-9]*)\\])");
+  static const boost::regex array_regex("(.+)\\[([0-9]*)\\]");
 
   using boost::regex;
   std::string::const_iterator begin = definition.begin();
@@ -77,16 +78,17 @@ ROSField::ROSField(const std::string &definition):
     throw std::runtime_error("Bad field when parsing message ----\n" + definition);
   }
 
-  if (regex_search(type, what, array_regex))
+
+  std::string type_tmp = type;
+  if (regex_search(type_tmp, what, array_regex))
   {
     type = what[1];
 
-    if (what.size() == 3) {
+    if (what.size() == 2) {
       _array_size = -1;
     }
-    else if (what.size() == 4) {
-      std::string size(what[3].first, what[3].second);
-      _array_size = size.empty() ? -1 : atoi(size.c_str());
+    else if (what.size() == 3) {
+      _array_size = what[2].first == what[2].second  ? -1 : std::stoi(what[2]);
     }
     else {
       throw std::runtime_error("Didn't catch bad type string: " + definition);

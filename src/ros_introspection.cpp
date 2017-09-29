@@ -308,6 +308,8 @@ void Parser::deserializeIntoFlatContainer(const std::string& msg_identifier,
     throw std::runtime_error("deserializeIntoFlatContainer: msg_identifier not registerd. Use registerMessageDefinition" );
   }
   size_t buffer_offset = 0;
+  size_t value_offset = 0;
+  size_t name_offset = 0;
 
   std::function<void(const MessageTreeNode*,StringTreeLeaf,bool)> deserializeImpl;
 
@@ -352,23 +354,31 @@ void Parser::deserializeIntoFlatContainer(const std::string& msg_identifier,
 
           if( field_type.typeID() == STRING )
           {
-            SString string;
-            ReadFromBuffer<SString>( buffer, buffer_offset, string );
+            uint32_t string_size = 0;
+            ReadFromBuffer( buffer, buffer_offset, string_size );
+            const char* buffer_ptr = reinterpret_cast<const char*>( &buffer[buffer_offset] );
+            buffer_offset += string_size;
 
             if( DO_STORE ){
-              flat_container->name.push_back( std::make_pair( new_tree_leaf, std::move(string) ) );
+              if (flat_container->name.size() < name_offset+1)
+                flat_container->name.resize(std::max(16ul,flat_container->name.size()*2));
+              auto& name = flat_container->name[name_offset++];
+              name.first = new_tree_leaf;
+              name.second.assign(buffer_ptr, string_size);
             }
           }
           else if( field_type.isBuiltin() )
           {
-            Variant var = ReadFromBufferToVariant( field_type.typeID(),
-                                                   buffer,
-                                                   buffer_offset );
             if( DO_STORE ){
-              flat_container->value.push_back( std::make_pair( new_tree_leaf, std::move(var) ) );
-            }
-            else{
-              ReadFromBufferToVariant( field_type.typeID(), buffer, buffer_offset );
+              if (flat_container->value.size() < value_offset+1)
+                flat_container->value.resize(std::max(16ul,flat_container->value.size()*2));
+              auto& value = flat_container->value[value_offset++];
+              value.first = new_tree_leaf;
+              value.second = ReadFromBufferToVariant( field_type.typeID(),
+                                                      buffer,
+                                                      buffer_offset );
+            } else {
+              buffer_offset += field_type.typeSize();
             }
           }
           else{ // field_type.typeID() == OTHER
@@ -388,9 +398,11 @@ void Parser::deserializeIntoFlatContainer(const std::string& msg_identifier,
   }; //end of lambda
 
 
-  flat_container->tree = &msg_info->string_tree;
-  flat_container->name.clear();
-  flat_container->value.clear();
+  if (flat_container->tree != &msg_info->string_tree) {
+    flat_container->tree = &msg_info->string_tree;
+    flat_container->name.clear();
+    flat_container->value.clear();
+  }
 
   StringTreeLeaf rootnode;
   rootnode.node_ptr = msg_info->string_tree.croot();
@@ -398,6 +410,10 @@ void Parser::deserializeIntoFlatContainer(const std::string& msg_identifier,
   deserializeImpl( msg_info->message_tree.croot(),
                    rootnode,
                    true);
+  // shrink to actual size
+  flat_container->name.resize(name_offset);
+  flat_container->value.resize(value_offset);
+
 
   if( buffer_offset != buffer.size() )
   {

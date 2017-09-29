@@ -43,6 +43,7 @@
 namespace RosIntrospection{
 
 struct ROSTypeFlat {
+  ROSTypeFlat() : tree(nullptr), value(), name(), blob() {}
 
   /// Tree that the StringTreeLeaf(s) refer to.
   const StringTree* tree;
